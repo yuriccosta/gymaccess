@@ -56,11 +56,25 @@ void gpio_callback(uint gpio, uint32_t events) {
 void atualizar_display() {
     char buffer[20];
 
-    ssd1306_fill(&ssd, 0);
-    sprintf(buffer, "alunos: %d", usuariosAtivos);
-    ssd1306_draw_string(&ssd, "Quantidade", 5, 10);
-    ssd1306_draw_string(&ssd, "de", 30, 20);
-    ssd1306_draw_string(&ssd, buffer, 5, 35);
+    ssd1306_fill(&ssd, 1);
+
+    // Borda do display
+    ssd1306_rect(&ssd, 3, 3, 122, 58, false, true);
+
+    ssd1306_draw_string(&ssd, "Controle", 32, 6);
+    ssd1306_draw_string(&ssd, "Academia", 32, 20);
+    ssd1306_hline(&ssd, 8, 119, 36, true);
+    sprintf(buffer, "Alunos: %d", usuariosAtivos);
+    ssd1306_draw_string(&ssd, buffer, 34, 48);
+
+    // Desenho de halter (halteres de academia) no canto superior direito
+
+    // Haste
+    ssd1306_rect(&ssd, 14, 108, 12, 2, true, true);
+    // Pesos
+    ssd1306_rect(&ssd, 12, 109, 2, 6, true, true);
+    ssd1306_rect(&ssd, 12, 117, 2, 6, true, true);
+
     ssd1306_send_data(&ssd);
     xSemaphoreGive(xMutexDisplay);
 }
@@ -140,7 +154,6 @@ void vTaskReset(void *params) {
     while (1) {
         if (xSemaphoreTake(xSemaforoReset, portMAX_DELAY) == pdTRUE) {
             if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE) {
-                usuariosAtivos = 0;
                 while (usuariosAtivos > 0) {
                     usuariosAtivos--;
                     xSemaphoreGive(xSemaforoAlunos);
@@ -150,7 +163,7 @@ void vTaskReset(void *params) {
                 atualizar_led();
                 xSemaphoreGive(xMutexDisplay);
             }
-            
+
             // Beep duplo
             pwm_set_gpio_level(BUZZER_A, 100);
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -234,7 +247,7 @@ int main()
 
     // Configura os periféricos
     setupPerifericos();
-    atualizar_led();
+
     // Configura interrupção do botão de reset
     gpio_set_irq_enabled_with_callback(SW_PIN, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 
@@ -242,6 +255,10 @@ int main()
     xSemaforoAlunos = xSemaphoreCreateCounting(MAX_ALUNOS, MAX_ALUNOS);
     xSemaforoReset = xSemaphoreCreateBinary();
     xMutexDisplay = xSemaphoreCreateMutex();
+
+    // Chama pela primeira vez
+    atualizar_display();
+    atualizar_led();
 
     // Cria tarefa
     xTaskCreate(vTaskEntrada, "TaskEntrada", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
