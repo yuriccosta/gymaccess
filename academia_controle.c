@@ -43,7 +43,8 @@ ssd1306_t ssd;
 SemaphoreHandle_t xSemaforoAlunos;
 SemaphoreHandle_t xSemaforoReset;
 SemaphoreHandle_t xMutexDisplay;
-int usuariosAtivos = 0;
+SemaphoreHandle_t xMutexLed;
+uint8_t usuariosAtivos = 0;
 
 // ISR do botão SW_PIN para resetar o sistema
 void gpio_callback(uint gpio, uint32_t events) {
@@ -54,49 +55,54 @@ void gpio_callback(uint gpio, uint32_t events) {
 
 
 void atualizar_display() {
-    char buffer[20];
-
-    ssd1306_fill(&ssd, 1);
-
-    // Borda do display
-    ssd1306_rect(&ssd, 3, 3, 122, 58, false, true);
-
-    ssd1306_draw_string(&ssd, "Controle", 32, 6);
-    ssd1306_draw_string(&ssd, "Academia", 32, 20);
-    ssd1306_hline(&ssd, 8, 119, 36, true);
-    sprintf(buffer, "Alunos: %d", usuariosAtivos);
-    ssd1306_draw_string(&ssd, buffer, 34, 48);
-
-    // Desenho de halter (halteres de academia) no canto superior direito
-
-    // Haste
-    ssd1306_rect(&ssd, 14, 108, 12, 2, true, true);
-    // Pesos
-    ssd1306_rect(&ssd, 12, 109, 2, 6, true, true);
-    ssd1306_rect(&ssd, 12, 117, 2, 6, true, true);
-
-    ssd1306_send_data(&ssd);
-    xSemaphoreGive(xMutexDisplay);
+    if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) != pdTRUE) {
+        char buffer[20];
+    
+        ssd1306_fill(&ssd, 1);
+    
+        // Borda do display
+        ssd1306_rect(&ssd, 3, 3, 122, 58, false, true);
+    
+        ssd1306_draw_string(&ssd, "Controle", 32, 6);
+        ssd1306_draw_string(&ssd, "Academia", 32, 20);
+        ssd1306_hline(&ssd, 8, 119, 36, true);
+        sprintf(buffer, "Alunos: %d", uxSemaphoreGetCount(xSemaforoAlunos));
+        ssd1306_draw_string(&ssd, buffer, 34, 48);
+    
+        // Desenho de halter (halteres de academia) no canto superior direito
+    
+        // Haste
+        ssd1306_rect(&ssd, 14, 108, 12, 2, true, true);
+        // Pesos
+        ssd1306_rect(&ssd, 12, 109, 2, 6, true, true);
+        ssd1306_rect(&ssd, 12, 117, 2, 6, true, true);
+    
+        ssd1306_send_data(&ssd);
+        xSemaphoreGive(xMutexDisplay);
+    }
 }
 
 
 void atualizar_led() {
-    if (usuariosAtivos == 0) {
-        gpio_put(LED_PIN_RED, 0);
-        gpio_put(LED_PIN_GREEN, 0);
-        gpio_put(LED_PIN_BLUE, 1); // Azul
-    } else if (usuariosAtivos < MAX_ALUNOS - 1) {
-        gpio_put(LED_PIN_RED, 0);
-        gpio_put(LED_PIN_GREEN, 1);
-        gpio_put(LED_PIN_BLUE, 0); // Verde
-    } else if (usuariosAtivos == MAX_ALUNOS - 1) {
-        gpio_put(LED_PIN_RED, 1);
-        gpio_put(LED_PIN_GREEN, 1);
-        gpio_put(LED_PIN_BLUE, 0); // Amarelo
-    } else {
-        gpio_put(LED_PIN_RED, 1);
-        gpio_put(LED_PIN_GREEN, 0);
-        gpio_put(LED_PIN_BLUE, 0); // Vermelho
+    if (xSemaphoreTake(xMutexLed, portMAX_DELAY) == pdTRUE) {
+        if (uxSemaphoreGetCount(xSemaforoAlunos) == 0) {
+            gpio_put(LED_PIN_RED, 0);
+            gpio_put(LED_PIN_GREEN, 0);
+            gpio_put(LED_PIN_BLUE, 1); // Azul
+        } else if (uxSemaphoreGetCount(xSemaforoAlunos) < MAX_ALUNOS - 1) {
+            gpio_put(LED_PIN_RED, 0);
+            gpio_put(LED_PIN_GREEN, 1);
+            gpio_put(LED_PIN_BLUE, 0); // Verde
+        } else if (uxSemaphoreGetCount(xSemaforoAlunos) == MAX_ALUNOS - 1) {
+            gpio_put(LED_PIN_RED, 1);
+            gpio_put(LED_PIN_GREEN, 1);
+            gpio_put(LED_PIN_BLUE, 0); // Amarelo
+        } else {
+            gpio_put(LED_PIN_RED, 1);
+            gpio_put(LED_PIN_GREEN, 0);
+            gpio_put(LED_PIN_BLUE, 0); // Vermelho
+        }
+        xSemaphoreGive(xMutexLed);
     }
 }
 
@@ -107,18 +113,14 @@ void atualizar_led() {
 void vTaskEntrada(void *params) {
     while (1) {
         if (!gpio_get(BOTAO_A)) {
-            if (xSemaphoreTake(xSemaforoAlunos, 0) == pdTRUE) {
-                if(xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE) {
-                    usuariosAtivos++;
-                    atualizar_display();
-                    atualizar_led();
-                    xSemaphoreGive(xMutexDisplay);
-                }
-            } else {
-                // Capacidade cheia
-                printf("Capacidade máxima atingida!\n");
+            if (uxSemaphoreGetCount(xSemaforoAlunos) < MAX_ALUNOS) {
+                xSemaphoreGive(xSemaforoAlunos);
 
-                // Beep
+                atualizar_display();
+                atualizar_led();
+
+            } else {
+                // Capacidade cheia Beep
                 pwm_set_gpio_level(BUZZER_A, 100);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 pwm_set_gpio_level(BUZZER_A, 0);
@@ -134,10 +136,8 @@ void vTaskEntrada(void *params) {
 void vTaskSaida(void *params) {
     while (1) {
         if (!gpio_get(BOTAO_B)) {
-            if (usuariosAtivos > 0) {
-                xSemaphoreGive(xSemaforoAlunos);
+            if (xSemaphoreTake(xSemaforoAlunos, 0) == pdTRUE) {
                 if(xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE) {
-                    usuariosAtivos--;
                     atualizar_display();
                     atualizar_led();
                     xSemaphoreGive(xMutexDisplay);
@@ -153,16 +153,12 @@ void vTaskSaida(void *params) {
 void vTaskReset(void *params) {
     while (1) {
         if (xSemaphoreTake(xSemaforoReset, portMAX_DELAY) == pdTRUE) {
-            if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE) {
-                while (usuariosAtivos > 0) {
-                    usuariosAtivos--;
-                    xSemaphoreGive(xSemaforoAlunos);
-                }
-
-                atualizar_display();
-                atualizar_led();
-                xSemaphoreGive(xMutexDisplay);
+            while (uxSemaphoreGetCount(xSemaforoAlunos) > 0) {
+                xSemaphoreTake(xSemaforoAlunos, 0);
             }
+
+            atualizar_display();
+            atualizar_led();   
 
             // Beep duplo
             pwm_set_gpio_level(BUZZER_A, 100);
@@ -251,10 +247,11 @@ int main()
     // Configura interrupção do botão de reset
     gpio_set_irq_enabled_with_callback(SW_PIN, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 
-    // Cria semáforo de contagem e mutex
-    xSemaforoAlunos = xSemaphoreCreateCounting(MAX_ALUNOS, MAX_ALUNOS);
+    // Cria semaforos e mutex
+    xSemaforoAlunos = xSemaphoreCreateCounting(MAX_ALUNOS, 0);
     xSemaforoReset = xSemaphoreCreateBinary();
     xMutexDisplay = xSemaphoreCreateMutex();
+    xMutexLed = xSemaphoreCreateMutex();
 
     // Chama pela primeira vez
     atualizar_display();
