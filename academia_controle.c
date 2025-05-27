@@ -1,18 +1,3 @@
-/*
-Você deverá implementar um painel de controle interativo, simulando o controle de acesso de
-usuários a um determinado espaço (ex: laboratório, biblioteca, refeitório). O sistema será baseado na
-placa BitDogLab com o RP2040 e utilizará:
-• Semáforo de contagem para controlar o número de usuários simultâneos.
-• Semáforo binário com interrupção para resetar o sistema.
-• Mutex para proteger o acesso ao display OLED.
-O sistema deve oferecer:
-• Feedback visual através do LED RGB, indicando a ocupação.
-• Sinalização sonora com o buzzer.
-• Exibição de mensagens e contagem no display OLED.
-
-O sistema simulado será o controle de acesso de uma academia
- */
-
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "hardware/gpio.h"
@@ -44,18 +29,11 @@ SemaphoreHandle_t xSemaforoAlunos;
 SemaphoreHandle_t xSemaforoReset;
 SemaphoreHandle_t xMutexDisplay;
 SemaphoreHandle_t xMutexLed;
-uint8_t usuariosAtivos = 0;
 
-// ISR do botão SW_PIN para resetar o sistema
-void gpio_callback(uint gpio, uint32_t events) {
-    if (gpio == SW_PIN) {
-        xSemaphoreGiveFromISR(xSemaforoReset, NULL);
-    }
-}
 
 
 void atualizar_display() {
-    if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE) {
         char buffer[20];
     
         ssd1306_fill(&ssd, 1);
@@ -106,8 +84,8 @@ void atualizar_led() {
     }
 }
 
-// TAREFAS
 
+// TAREFAS
 
 // Aumenta o número de usuários ativos. Caso o limite seja atingido, exibe aviso e emite um beep.
 void vTaskEntrada(void *params) {
@@ -137,11 +115,8 @@ void vTaskSaida(void *params) {
     while (1) {
         if (!gpio_get(BOTAO_B)) {
             if (xSemaphoreTake(xSemaforoAlunos, 0) == pdTRUE) {
-                if(xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE) {
                     atualizar_display();
                     atualizar_led();
-                    xSemaphoreGive(xMutexDisplay);
-                }
             }
             vTaskDelay(pdMS_TO_TICKS(300));
         }
@@ -185,7 +160,9 @@ void gpio_irq_handler(uint gpio, uint32_t events)
         // 200 ms = 200000 us
         if (agora - ultimo_acionamento >= 200000) {
             ultimo_acionamento  = agora;
-            gpio_callback(gpio, events);
+            BaseType_t xHigherPriorityTaskWoken = pdFALSE;  //Nenhum contexto de tarefa foi despertado
+            xSemaphoreGiveFromISR(xSemaforoReset, &xHigherPriorityTaskWoken);    //Libera o semáforo
+            portYIELD_FROM_ISR(xHigherPriorityTaskWoken); // Troca o contexto da tarefa
         }
         // Se for dentro do tempo de debounce, ignora o evento
     }
